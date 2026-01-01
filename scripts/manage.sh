@@ -2,8 +2,7 @@
 
 SERVICE_NAME="miloco-bot"
 INSTALL_DIR="/opt/miloco-bot"
-BINARY_NAME="node"
-SCRIPT_NAME="bundle.cjs"
+BINARY_NAME="miloco-bot"
 
 function show_help {
     echo "Usage: $0 {install|start|stop|restart|status|logs}"
@@ -27,23 +26,13 @@ if [ "$1" == "install" ]; then
     # Create directory
     mkdir -p $INSTALL_DIR
     
-    # Copy node binary
-    if [ -f "temp_build/node" ]; then
-        cp "temp_build/node" "$INSTALL_DIR/$BINARY_NAME"
-    elif [ -f "node" ]; then
-        cp "node" "$INSTALL_DIR/$BINARY_NAME"
+    # Copy SEA binary
+    if [ -f "dist/miloco-bot-linux" ]; then
+        cp "dist/miloco-bot-linux" "$INSTALL_DIR/$BINARY_NAME"
+    elif [ -f "miloco-bot-linux" ]; then
+        cp "miloco-bot-linux" "$INSTALL_DIR/$BINARY_NAME"
     else
-        echo "Error: node binary not found in temp_build/ or current directory"
-        exit 1
-    fi
-
-    # Copy bundle script
-    if [ -f "dist/bundle.cjs" ]; then
-        cp "dist/bundle.cjs" "$INSTALL_DIR/$SCRIPT_NAME"
-    elif [ -f "bundle.cjs" ]; then
-        cp "bundle.cjs" "$INSTALL_DIR/$SCRIPT_NAME"
-    else
-        echo "Error: bundle.cjs not found in dist/ or current directory"
+        echo "Error: miloco-bot-linux binary not found in dist/ or current directory"
         exit 1
     fi
 
@@ -65,7 +54,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/$BINARY_NAME $INSTALL_DIR/$SCRIPT_NAME
+ExecStart=$INSTALL_DIR/$BINARY_NAME
 Restart=always
 RestartSec=10
 EnvironmentFile=$INSTALL_DIR/.env
@@ -87,6 +76,7 @@ EOF
     echo "2. Start service: $0 start"
     exit 0
 fi
+
 
 # Wrapper commands
 if [ "$1" == "start" ]; then

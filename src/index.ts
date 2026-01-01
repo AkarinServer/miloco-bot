@@ -17,7 +17,33 @@ const mcpApiKey = process.env.MCP_API_KEY;
 
 // Initialize Telegram Bot
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
-const defaultChatId = process.env.TELEGRAM_DEFAULT_CHAT_ID;
+
+// Allowed User IDs Logic
+const allowedUserIdsStr = process.env.TELEGRAM_ALLOWED_USER_IDS || "";
+const allowedUserIds = allowedUserIdsStr
+  .split(",")
+  .map((id) => id.trim())
+  .filter((id) => id.length > 0);
+
+bot.use(async (ctx, next) => {
+  // Check if we have a user sender
+  if (!ctx.from) {
+    return next();
+  }
+
+  const userId = ctx.from.id.toString();
+  const validIds = new Set(allowedUserIds);
+
+  if (validIds.size > 0) {
+      if (!validIds.has(userId)) {
+          // Deny
+          console.log(`[Access Denied] User ${userId} (${ctx.from.first_name}) is not in allowed list.`);
+          return; // Stop processing, no reply
+      }
+  }
+
+  return next();
+});
 
 // Initialize Miloco Client
 const milocoClient = new MilocoClient({
@@ -51,7 +77,7 @@ server.registerTool(
     description: "Send a text message to a Telegram user or group",
     inputSchema: {
       message: z.string().describe("The message text to send"),
-      chat_id: z.string().optional().describe("The Telegram chat ID to send to. Leave empty (or omit) to use the configured default chat ID."),
+      chat_id: z.string().optional().describe("The Telegram chat ID to send to. Leave empty (or omit) to broadcast to ALL allowed users."),
     },
   },
   async ({ message, chat_id }) => {
@@ -61,25 +87,50 @@ server.registerTool(
       targetChatId = undefined;
     }
     
-    targetChatId = targetChatId || defaultChatId;
-    
-    if (!targetChatId) {
-      return {
-        content: [{ type: "text", text: "Error: No chat_id provided and no default configured." }],
-        isError: true,
-      };
-    }
+    if (targetChatId) {
+        // Send to specific chat_id
+        try {
+            await bot.telegram.sendMessage(targetChatId, message);
+            return {
+                content: [{ type: "text", text: `Message sent to ${targetChatId}` }],
+            };
+        } catch (error: any) {
+            return {
+                content: [{ type: "text", text: `Failed to send message to ${targetChatId}: ${error.message}` }],
+                isError: true,
+            };
+        }
+    } else {
+        // Broadcast to all allowed users
+        if (allowedUserIds.length === 0) {
+             return {
+                content: [{ type: "text", text: "Error: No allowed users configured to broadcast to." }],
+                isError: true,
+            };
+        }
 
-    try {
-      await bot.telegram.sendMessage(targetChatId, message);
-      return {
-        content: [{ type: "text", text: `Message sent to ${targetChatId}` }],
-      };
-    } catch (error: any) {
-      return {
-        content: [{ type: "text", text: `Failed to send message: ${error.message}` }],
-        isError: true,
-      };
+        const results = await Promise.all(allowedUserIds.map(async (id) => {
+            try {
+                await bot.telegram.sendMessage(id, message);
+                return { id, success: true };
+            } catch (error: any) {
+                console.error(`Failed to send to ${id}:`, error);
+                return { id, success: false, error: error.message };
+            }
+        }));
+
+        const successCount = results.filter(r => r.success).length;
+        const failures = results.filter(r => !r.success).map(r => `${r.id} (${r.error})`);
+        
+        let resultText = `Message broadcasted to ${successCount}/${allowedUserIds.length} users.`;
+        if (failures.length > 0) {
+            resultText += ` Failures: ${failures.join(", ")}`;
+        }
+
+        return {
+            content: [{ type: "text", text: resultText }],
+            isError: failures.length === allowedUserIds.length // Error if all failed
+        };
     }
   }
 );
@@ -88,75 +139,114 @@ server.registerTool(
 server.registerTool(
   "send_telegram_photo",
   {
-    description: "Send the latest photo/image from the vision_understand cache to the default Telegram chat. No parameters required.",
-    inputSchema: z.object({}),
+    description: "Send the latest photo/image from the vision_understand cache to a Telegram chat.",
+    inputSchema: z.object({
+        chat_id: z.string().optional().describe("The Telegram chat ID to send to. Leave empty (or omit) to broadcast to ALL allowed users."),
+    }),
   },
-  async () => {
-    const targetChatId = defaultChatId;
-    
-    if (!targetChatId) {
-      return {
-        content: [{ type: "text", text: "Error: No default chat_id configured." }],
-        isError: true,
-      };
+  async ({ chat_id } = {}) => {
+    let targetChatId = chat_id;
+    if (targetChatId === "default") targetChatId = undefined;
+
+    // Common logic to find image (moved out or duplicated for now, better to keep inside to avoid scope issues)
+    // Helper function to find the data directory
+    const findDataDir = () => {
+        if (process.env.MILOCO_DATA_DIR && fs.existsSync(process.env.MILOCO_DATA_DIR)) {
+            return process.env.MILOCO_DATA_DIR;
+        }
+        const os = require("os");
+        const candidates = [
+            path.join(os.homedir(), "miloco/data/images"),
+            "/home/ubuntu/miloco/data/images",
+        ];
+        if (fs.existsSync("/home")) {
+            try {
+                const users = fs.readdirSync("/home");
+                for (const user of users) {
+                    const p = path.join("/home", user, "miloco/data/images");
+                    if (!candidates.includes(p)) candidates.push(p);
+                }
+            } catch (e) { console.error("Failed to scan /home:", e); }
+        }
+        for (const c of candidates) {
+            if (fs.existsSync(c)) return c;
+        }
+        return path.join(os.homedir(), "miloco/data/images");
+    };
+
+    const baseDir = findDataDir();
+    if (!fs.existsSync(baseDir)) {
+        return { content: [{ type: "text", text: `Error: Cache base directory (${baseDir}) does not exist.` }], isError: true };
     }
 
-    try {
-      // Find latest image in vision_understand cache
-      const baseDir = "/home/ubuntu/miloco/data/images";
-      
-      if (!fs.existsSync(baseDir)) {
-          return {
-              content: [{ type: "text", text: `Error: Cache base directory (${baseDir}) does not exist.` }],
-              isError: true,
-          };
-      }
+    const date = new Date();
+    date.setHours(date.getHours() + 8);
+    const year = date.getUTCFullYear().toString().slice(2);
+    const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
+    const day = date.getUTCDate().toString().padStart(2, '0');
+    const dateStr = `${year}${month}${day}`;
+    const dateDir = path.join(baseDir, dateStr);
+    
+    if (!fs.existsSync(dateDir)) {
+        return { content: [{ type: "text", text: `Error: Cache directory for today (${dateDir}) does not exist.` }], isError: true };
+    }
 
-      // Get today's date directory in YYMMDD format (Beijing Time UTC+8)
-      const date = new Date();
-      date.setHours(date.getHours() + 8);
-      const year = date.getUTCFullYear().toString().slice(2);
-      const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
-      const day = date.getUTCDate().toString().padStart(2, '0');
-      const dateStr = `${year}${month}${day}`;
-      
-      const dateDir = path.join(baseDir, dateStr);
-      
-      if (!fs.existsSync(dateDir)) {
-          return {
-              content: [{ type: "text", text: `Error: Cache directory for today (${dateDir}) does not exist.` }],
-              isError: true,
-          };
-      }
+    const files = fs.readdirSync(dateDir)
+        .filter(f => f.endsWith('.jpg') || f.endsWith('.png') || f.endsWith('.jpeg'))
+        .map(f => ({ name: f, time: fs.statSync(path.join(dateDir, f)).mtime.getTime() }))
+        .sort((a, b) => b.time - a.time);
+    
+    if (files.length === 0 || !files[0]) {
+        return { content: [{ type: "text", text: `Error: No images found in cache directory ${dateDir}` }], isError: true };
+    }
 
-      const files = fs.readdirSync(dateDir)
-          .filter(f => f.endsWith('.jpg') || f.endsWith('.png') || f.endsWith('.jpeg'))
-          .map(f => ({
-              name: f,
-              time: fs.statSync(path.join(dateDir, f)).mtime.getTime()
-          }))
-          .sort((a, b) => b.time - a.time); // Descending order
-      
-      if (files.length === 0 || !files[0]) {
-          return {
-              content: [{ type: "text", text: `Error: No images found in cache directory ${dateDir}` }],
-              isError: true,
-          };
-      }
+    const latestFile = path.join(dateDir, files[0].name);
+    const photoArg = { source: latestFile };
 
-      const latestFile = path.join(dateDir, files[0].name);
-      console.log(`Found latest image for send_telegram_photo: ${latestFile}`);
-      const photoArg = { source: latestFile };
+    // Send logic
+    if (targetChatId) {
+        try {
+            await bot.telegram.sendPhoto(targetChatId, photoArg);
+            return {
+                content: [{ type: "text", text: `Latest photo sent to ${targetChatId}: ${files[0].name}` }],
+            };
+        } catch (error: any) {
+            return {
+                content: [{ type: "text", text: `Failed to send photo to ${targetChatId}: ${error.message}` }],
+                isError: true,
+            };
+        }
+    } else {
+        // Broadcast
+        if (allowedUserIds.length === 0) {
+             return {
+                content: [{ type: "text", text: "Error: No allowed users configured to broadcast to." }],
+                isError: true,
+            };
+        }
 
-      await bot.telegram.sendPhoto(targetChatId, photoArg);
-      return {
-        content: [{ type: "text", text: `Latest photo sent to ${targetChatId}: ${files[0].name}` }],
-      };
-    } catch (error: any) {
-      return {
-        content: [{ type: "text", text: `Failed to send photo: ${error.message}` }],
-        isError: true,
-      };
+        const results = await Promise.all(allowedUserIds.map(async (id) => {
+            try {
+                await bot.telegram.sendPhoto(id, photoArg);
+                return { id, success: true };
+            } catch (error: any) {
+                console.error(`Failed to send photo to ${id}:`, error);
+                return { id, success: false, error: error.message };
+            }
+        }));
+
+        const successCount = results.filter(r => r.success).length;
+        const failures = results.filter(r => !r.success).map(r => `${r.id} (${r.error})`);
+        
+        let resultText = `Photo broadcasted to ${successCount}/${allowedUserIds.length} users. File: ${files[0].name}`;
+        if (failures.length > 0) {
+            resultText += ` Failures: ${failures.join(", ")}`;
+        }
+
+        return {
+            content: [{ type: "text", text: resultText }],
+            isError: failures.length === allowedUserIds.length
+        };
     }
   }
 );
@@ -204,6 +294,144 @@ async function addMessageAndNotify(message: string) {
     console.log("No MCP client connected, skipping notification.");
   }
 }
+
+// --- Command Handlers ---
+
+bot.command("help", async (ctx) => {
+  const message = `
+🤖 *Miloco Bot Commands*
+
+/help - Show this list of commands
+/rules - Manage trigger rules
+/status - Check connection status
+/ping - Test bot responsiveness
+  `;
+  // Using Markdown for better formatting
+  await ctx.replyWithMarkdown(message);
+});
+
+bot.command("rules", async (ctx) => {
+    try {
+        if (!milocoClient.isLoggedin) {
+            await ctx.reply("Please login first by sending the password.");
+            return;
+        }
+        const rules = await milocoClient.getRules();
+        if (rules.length === 0) {
+            await ctx.reply("No rules found.");
+            return;
+        }
+        
+        const keyboard = rules.map((rule: any) => {
+            const statusEmoji = rule.enabled ? "✅" : "❌";
+            return [{
+                text: `${statusEmoji} ${rule.name}`,
+                callback_data: `toggle_rule:${rule.id}`
+            }];
+        });
+        
+        await ctx.reply("Trigger Rules (Click to toggle):", {
+            reply_markup: {
+                inline_keyboard: keyboard
+            }
+        });
+    } catch (err: any) {
+        await ctx.reply(`Failed to load rules: ${err.message}`);
+    }
+});
+
+bot.action(/toggle_rule:(.+)/, async (ctx) => {
+    const ruleId = ctx.match[1];
+    if (!ruleId) return;
+    try {
+        const rules = await milocoClient.getRules();
+        const rule = rules.find((r: any) => r.id === ruleId);
+        
+        if (!rule) {
+            await ctx.answerCbQuery("Rule not found");
+            return;
+        }
+        
+        const newStatus = !rule.enabled;
+        await milocoClient.toggleRule(ruleId, newStatus);
+        
+        // Refresh list
+        const updatedRules = await milocoClient.getRules();
+        const keyboard = updatedRules.map((r: any) => {
+            const statusEmoji = r.enabled ? "✅" : "❌";
+            return [{
+                text: `${statusEmoji} ${r.name}`,
+                callback_data: `toggle_rule:${r.id}`
+            }];
+        });
+        
+        await ctx.editMessageReplyMarkup({
+             inline_keyboard: keyboard
+        });
+        
+        await ctx.answerCbQuery(`Rule "${rule.name}" ${newStatus ? 'enabled' : 'disabled'}`);
+        
+    } catch (err: any) {
+        console.error("Toggle failed", err);
+        await ctx.answerCbQuery(`Failed: ${err.message}`);
+    }
+});
+
+// Tool: List rules
+server.registerTool(
+  "list_rules",
+  {
+    description: "List all trigger rules with their status",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    try {
+      const rules = await milocoClient.getRules();
+      return {
+        content: [{ type: "text", text: JSON.stringify(rules, null, 2) }],
+      };
+    } catch (error: any) {
+      return {
+        content: [{ type: "text", text: `Failed to list rules: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Tool: Toggle rule
+server.registerTool(
+  "toggle_rule",
+  {
+    description: "Enable or disable a trigger rule",
+    inputSchema: z.object({
+      rule_id: z.string().describe("The ID of the rule to toggle"),
+      enabled: z.boolean().describe("True to enable, False to disable"),
+    }),
+  },
+  async ({ rule_id, enabled }) => {
+    try {
+      await milocoClient.toggleRule(rule_id, enabled);
+      return {
+        content: [{ type: "text", text: `Rule ${rule_id} ${enabled ? 'enabled' : 'disabled'}` }],
+      };
+    } catch (error: any) {
+      return {
+        content: [{ type: "text", text: `Failed to toggle rule: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+bot.command("status", async (ctx) => {
+    const status = milocoClient.isLoggedin ? "✅ Logged In" : "❌ Not Logged In";
+    await ctx.reply(`Bot Status: ${status}\nMCPServer: Running`);
+});
+
+bot.command("ping", async (ctx) => {
+    await ctx.reply("Pong! 🏓");
+});
 
 bot.on("text", async (ctx) => {
   // Check if MilocoClient is logged in
@@ -287,6 +515,18 @@ async function main() {
     const httpServer = app.listen(port, "0.0.0.0", () => {
         console.log(`MCP Server running on port ${port}`);
     });
+
+    // Set Telegram commands menu
+    try {
+        await bot.telegram.setMyCommands([
+            { command: "rules", description: "Show list of commands" },
+            { command: "status", description: "Check connection status" },
+            { command: "ping", description: "Test bot responsiveness" }
+        ]);
+        console.log("Telegram commands menu updated");
+    } catch (err) {
+        console.error("Failed to set Telegram commands:", err);
+    }
 
     // Launch Bot
     console.log("Starting Telegram bot...");

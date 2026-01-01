@@ -35,9 +35,10 @@ async function main() {
     execSync('node --experimental-sea-config sea-config.json', { stdio: 'inherit', cwd: projectRoot });
 
     console.log('📥 3. Fetching Node.js binary for Linux x64...');
-    // We'll use a specific Node version. Ideally match the development version or use latest LTS/Current.
-    // Using Node 22.0.0 for better SEA compatibility (Node 24 has injection issues)
-    const NODE_VERSION = 'v22.0.0'; 
+    // Use the current running Node version to ensure blob compatibility
+    const NODE_VERSION = process.version; 
+    console.log(`   Targeting Node.js version: ${NODE_VERSION}`);
+
     const NODE_DIST_URL = `https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-x64.tar.gz`;
     const tarballPath = path.join(tempDir, 'node-linux.tar.gz');
     

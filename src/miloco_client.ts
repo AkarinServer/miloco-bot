@@ -170,6 +170,95 @@ export class MilocoClient {
     });
   }
 
+  private async makeRequest(method: string, path: string, data?: any): Promise<any> {
+    if (!this.token) {
+        await this.connect();
+    }
+    if (!this.token) {
+        throw new Error("Not logged in");
+    }
+
+    const MILOCO_WS_URL = process.env.MILOCO_WS_URL || "ws://localhost:8000/chat/ws/query";
+    const wsUrlObj = new URL(MILOCO_WS_URL);
+    const protocol = wsUrlObj.protocol === 'wss:' ? 'https:' : 'http:';
+    const requestModule = protocol === 'https:' ? https : require('http');
+    const url = `${protocol}//${wsUrlObj.host}${path}`;
+
+    return new Promise((resolve, reject) => {
+        const options: any = {
+            method: method,
+            headers: {
+                'Content-Type': 'application/json',
+                'Cookie': `access_token=${this.token}`
+            },
+            rejectUnauthorized: false
+        };
+
+        const req = requestModule.request(url, options, (res: IncomingMessage) => {
+             let responseData = '';
+             res.on('data', (chunk) => responseData += chunk);
+             res.on('end', () => {
+                 if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+                     try {
+                         const json = JSON.parse(responseData);
+                         resolve(json);
+                     } catch (e) {
+                         // If response is not JSON, return text or throw
+                         resolve(responseData);
+                     }
+                 } else {
+                     reject(new Error(`Request failed: ${res.statusCode} ${responseData}`));
+                 }
+             });
+        });
+
+        req.on('error', (e: Error) => reject(e));
+
+        if (data) {
+            req.write(JSON.stringify(data));
+        }
+        req.end();
+    });
+  }
+
+  public async getRules(enabledOnly: boolean = false): Promise<any[]> {
+      const response = await this.makeRequest('GET', `/api/trigger/rules?enabled_only=${enabledOnly}`);
+      return response.data;
+  }
+
+  public async toggleRule(ruleId: string, enabled: boolean): Promise<void> {
+      // 1. Get all rules to find the one we want (API doesn't support get single rule by ID easily without knowing if it's enabled or not, but getRules returns all)
+      const rules = await this.getRules();
+      const rule = rules.find((r: any) => r.id === ruleId);
+      
+      if (!rule) {
+          throw new Error(`Rule with ID ${ruleId} not found`);
+      }
+
+      // 2. Prepare update data
+      // Rule detail has cameras as objects, but update expects IDs
+      const cameraIds = rule.cameras.map((c: any) => c.did || c.device_id || c.id); 
+      // Note: CameraInfo has 'did'. 
+      
+      // Handle execute_info conversion (mcp_list objects -> IDs)
+      let executeInfo = { ...rule.execute_info };
+      if (executeInfo && Array.isArray(executeInfo.mcp_list)) {
+          if (executeInfo.mcp_list.length > 0 && typeof executeInfo.mcp_list[0] === 'object') {
+             executeInfo.mcp_list = executeInfo.mcp_list.map((m: any) => m.client_id || m.id);
+          }
+      }
+
+      const updateData = {
+          ...rule,
+          enabled: enabled,
+          cameras: cameraIds,
+          execute_info: executeInfo
+      };
+
+      // 3. Update
+      await this.makeRequest('PUT', `/api/trigger/rule/${ruleId}`, updateData);
+  }
+
   public async sendQuery(chatId: string, query: string) {
     if (!this.token) {
       throw new Error("Not logged in");

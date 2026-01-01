@@ -88,101 +88,69 @@ server.registerTool(
 server.registerTool(
   "send_telegram_photo",
   {
-    description: "Send a photo/image to a Telegram user or group. Supports URLs, local file paths, and file IDs. If 'photo' is omitted, it attempts to send the latest image from the vision_understand cache.",
-    inputSchema: {
-      photo: z.string().optional().describe("The image URL, local file path, or Telegram file ID to send. If omitted, sends the latest cached image."),
-      caption: z.string().optional().describe("Optional caption for the photo"),
-      chat_id: z.string().optional().describe("The Telegram chat ID to send to. Leave empty (or omit) to use the configured default chat ID."),
-    },
+    description: "Send the latest photo/image from the vision_understand cache to the default Telegram chat. No parameters required.",
+    inputSchema: z.object({}),
   },
-  async ({ photo, caption, chat_id }) => {
-    let targetChatId = chat_id;
-    if (targetChatId === "default") {
-      targetChatId = undefined;
-    }
-    
-    targetChatId = targetChatId || defaultChatId;
+  async () => {
+    const targetChatId = defaultChatId;
     
     if (!targetChatId) {
       return {
-        content: [{ type: "text", text: "Error: No chat_id provided and no default configured." }],
+        content: [{ type: "text", text: "Error: No default chat_id configured." }],
         isError: true,
       };
     }
 
     try {
-      const extra = caption ? { caption } : {};
-      let photoArg: any = photo;
-
-      // Case 1: Photo argument provided
-      if (photo) {
-          // Handle local file paths
-          if (!photo.startsWith("http") && (photo.startsWith("/") || photo.startsWith("./") || photo.match(/^[a-zA-Z]:/))) {
-              if (fs.existsSync(photo)) {
-                 photoArg = { source: photo };
-              } else {
-                 // Try mapping /app/miloco_server/.temp (Docker) to /home/ubuntu/miloco/data (Host)
-                 const dockerPrefix = "/app/miloco_server/.temp";
-                 const hostPrefix = "/home/ubuntu/miloco/data";
-                 if (photo.startsWith(dockerPrefix)) {
-                     const mappedPath = photo.replace(dockerPrefix, hostPrefix);
-                     if (fs.existsSync(mappedPath)) {
-                         photoArg = { source: mappedPath };
-                     }
-                 }
-              }
-          }
-      } 
-      // Case 2: No photo argument, try to find latest image in vision_understand cache
-      else {
-          const baseDir = "/home/ubuntu/miloco/data/images";
-          if (fs.existsSync(baseDir)) {
-              // Get today's date directory in YYMMDD format (Beijing Time UTC+8)
-              const date = new Date();
-              date.setHours(date.getHours() + 8);
-              const year = date.getUTCFullYear().toString().slice(2);
-              const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
-              const day = date.getUTCDate().toString().padStart(2, '0');
-              const dateStr = `${year}${month}${day}`;
-              
-              const dateDir = path.join(baseDir, dateStr);
-              
-              if (fs.existsSync(dateDir)) {
-                  const files = fs.readdirSync(dateDir)
-                      .filter(f => f.endsWith('.jpg') || f.endsWith('.png') || f.endsWith('.jpeg'))
-                      .map(f => ({
-                          name: f,
-                          time: fs.statSync(path.join(dateDir, f)).mtime.getTime()
-                      }))
-                      .sort((a, b) => b.time - a.time); // Descending order
-                  
-                  if (files.length > 0 && files[0]) {
-                      const latestFile = path.join(dateDir, files[0].name);
-                      console.log(`Found latest image for send_telegram_photo: ${latestFile}`);
-                      photoArg = { source: latestFile };
-                  } else {
-                      return {
-                          content: [{ type: "text", text: `Error: No images found in cache directory ${dateDir}` }],
-                          isError: true,
-                      };
-                  }
-              } else {
-                  return {
-                      content: [{ type: "text", text: `Error: Cache directory for today (${dateDir}) does not exist.` }],
-                      isError: true,
-                  };
-              }
-          } else {
-              return {
-                  content: [{ type: "text", text: "Error: No photo provided and cache directory not found." }],
-                  isError: true,
-              };
-          }
+      // Find latest image in vision_understand cache
+      const baseDir = "/home/ubuntu/miloco/data/images";
+      
+      if (!fs.existsSync(baseDir)) {
+          return {
+              content: [{ type: "text", text: `Error: Cache base directory (${baseDir}) does not exist.` }],
+              isError: true,
+          };
       }
 
-      await bot.telegram.sendPhoto(targetChatId, photoArg, extra);
+      // Get today's date directory in YYMMDD format (Beijing Time UTC+8)
+      const date = new Date();
+      date.setHours(date.getHours() + 8);
+      const year = date.getUTCFullYear().toString().slice(2);
+      const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
+      const day = date.getUTCDate().toString().padStart(2, '0');
+      const dateStr = `${year}${month}${day}`;
+      
+      const dateDir = path.join(baseDir, dateStr);
+      
+      if (!fs.existsSync(dateDir)) {
+          return {
+              content: [{ type: "text", text: `Error: Cache directory for today (${dateDir}) does not exist.` }],
+              isError: true,
+          };
+      }
+
+      const files = fs.readdirSync(dateDir)
+          .filter(f => f.endsWith('.jpg') || f.endsWith('.png') || f.endsWith('.jpeg'))
+          .map(f => ({
+              name: f,
+              time: fs.statSync(path.join(dateDir, f)).mtime.getTime()
+          }))
+          .sort((a, b) => b.time - a.time); // Descending order
+      
+      if (files.length === 0 || !files[0]) {
+          return {
+              content: [{ type: "text", text: `Error: No images found in cache directory ${dateDir}` }],
+              isError: true,
+          };
+      }
+
+      const latestFile = path.join(dateDir, files[0].name);
+      console.log(`Found latest image for send_telegram_photo: ${latestFile}`);
+      const photoArg = { source: latestFile };
+
+      await bot.telegram.sendPhoto(targetChatId, photoArg);
       return {
-        content: [{ type: "text", text: `Photo sent to ${targetChatId}` }],
+        content: [{ type: "text", text: `Latest photo sent to ${targetChatId}: ${files[0].name}` }],
       };
     } catch (error: any) {
       return {

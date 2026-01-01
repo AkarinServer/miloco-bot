@@ -45,12 +45,48 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
+function escapeHtml(unsafe: string): string {
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 // Initialize Miloco Client
 const milocoClient = new MilocoClient({
   onMessage: async (chatId, message, isFinal) => {
     if (isFinal && message.trim()) {
       try {
-        await bot.telegram.sendMessage(chatId, message);
+        let htmlMessage = "";
+        
+        // Split by tags to handle content robustly
+        const parts = message.split(/(<reflect>[\s\S]*?<\/reflect>|<final_answer>[\s\S]*?<\/final_answer>)/g);
+        
+        for (const part of parts) {
+            if (part.startsWith("<reflect>") && part.endsWith("</reflect>")) {
+                const content = part.substring(9, part.length - 10); // Remove <reflect> and </reflect>
+                if (content.trim()) {
+                    htmlMessage += `<blockquote>${escapeHtml(content)}</blockquote>`;
+                }
+            } else if (part.startsWith("<final_answer>") && part.endsWith("</final_answer>")) {
+                const content = part.substring(14, part.length - 15); // Remove <final_answer> and </final_answer>
+                htmlMessage += escapeHtml(content);
+            } else {
+                // Regular text (or empty strings from split)
+                if (part) {
+                    htmlMessage += escapeHtml(part);
+                }
+            }
+        }
+
+        // If for some reason parsing failed or resulted in empty string (e.g. no tags found and no other text?), 
+        // fallback to escaping the whole message. 
+        // But the split logic above should handle "no tags" by putting everything in the "else" block.
+        // We should just ensure we don't send empty message.
+        
+        const finalToSend = htmlMessage.trim() || escapeHtml(message);
+
+        await bot.telegram.sendMessage(chatId, finalToSend, { parse_mode: 'HTML' });
       } catch (err) {
         console.error(`Failed to send response to ${chatId}:`, err);
       }
@@ -519,7 +555,8 @@ async function main() {
     // Set Telegram commands menu
     try {
         await bot.telegram.setMyCommands([
-            { command: "rules", description: "Show list of commands" },
+            { command: "help", description: "Show help message" },
+            { command: "rules", description: "Manage trigger rules" },
             { command: "status", description: "Check connection status" },
             { command: "ping", description: "Test bot responsiveness" }
         ]);

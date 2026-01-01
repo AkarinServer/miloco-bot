@@ -4,6 +4,7 @@ import path from 'path';
 import { pipeline } from 'stream/promises';
 import { Readable } from 'stream';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 
 // Helper to download file
 async function downloadFile(url: string, dest: string) {
@@ -18,15 +19,50 @@ async function downloadFile(url: string, dest: string) {
     await pipeline(Readable.fromWeb(response.body as any), fileStream);
 }
 
+async function calculateChecksum(filePath: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const hash = crypto.createHash('sha256');
+        const stream = fs.createReadStream(filePath);
+        stream.on('error', err => reject(err));
+        stream.on('data', chunk => hash.update(chunk));
+        stream.on('end', () => resolve(hash.digest('hex')));
+    });
+}
+
+async function getExpectedChecksum(version: string, filename: string): Promise<string | null> {
+    const url = `https://nodejs.org/dist/${version}/SHASUMS256.txt`;
+    console.log(`   Fetching checksums from ${url}...`);
+    try {
+        const response = await fetch(url);
+        if (!response.ok) {
+            console.warn(`   Failed to fetch SHASUMS256.txt: ${response.statusText}`);
+            return null;
+        }
+        const text = await response.text();
+        const lines = text.split('\n');
+        for (const line of lines) {
+            if (line.trim().endsWith(filename)) {
+                return line.split(/\s+/)[0];
+            }
+        }
+        console.warn(`   Checksum for ${filename} not found in SHASUMS256.txt`);
+    } catch (e) {
+        console.warn('   Failed to fetch checksums:', e);
+    }
+    return null;
+}
+
 async function main() {
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
     const projectRoot = path.join(__dirname, '..');
     const distDir = path.join(projectRoot, 'dist');
     const tempDir = path.join(projectRoot, 'temp_build');
+    const cacheDir = path.join(projectRoot, '.cache');
 
-    // Ensure dist exists
+    // Ensure directories exist
     if (!fs.existsSync(distDir)) fs.mkdirSync(distDir, { recursive: true });
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+    if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
 
     console.log('📦 1. Bundling with esbuild...');
     execSync('npm run build:bundle', { stdio: 'inherit', cwd: projectRoot });
@@ -39,28 +75,62 @@ async function main() {
     const NODE_VERSION = process.version; 
     console.log(`   Targeting Node.js version: ${NODE_VERSION}`);
 
-    const NODE_DIST_URL = `https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-x64.tar.gz`;
-    const tarballPath = path.join(tempDir, 'node-linux.tar.gz');
+    const tarballFilename = `node-${NODE_VERSION}-linux-x64.tar.gz`;
+    const NODE_DIST_URL = `https://nodejs.org/dist/${NODE_VERSION}/${tarballFilename}`;
+    const cachedTarballPath = path.join(cacheDir, tarballFilename);
+    const tempTarballPath = path.join(tempDir, 'node-linux.tar.gz');
     
-    console.log(`   Downloading ${NODE_DIST_URL}...`);
-    try {
-        await downloadFile(NODE_DIST_URL, tarballPath);
-    } catch (e) {
-        // Fallback to nightly if v24.0.0 is not yet released (safety net)
-        console.log('   Failed to download v24.0.0, trying nightly...');
-        // Note: Nightly URL structure might differ, but let's try a safe assumption or just fail with instruction
-        // Ideally we should use a released version. Since the user asked for Node 24, we assume it exists.
-        throw new Error(`Failed to download Node.js ${NODE_VERSION}. Please check if it is released.`);
+    let useCached = false;
+    const expectedChecksum = await getExpectedChecksum(NODE_VERSION, tarballFilename);
+
+    if (fs.existsSync(cachedTarballPath)) {
+        if (expectedChecksum) {
+            console.log('   Checking cached file integrity...');
+            const actualChecksum = await calculateChecksum(cachedTarballPath);
+            if (actualChecksum === expectedChecksum) {
+                console.log('   ✅ Cached file matches checksum. Skipping download.');
+                useCached = true;
+            } else {
+                console.log('   ❌ Cached file checksum mismatch. Redownloading...');
+            }
+        } else {
+            console.log('   ⚠️ No checksum found to verify. Assuming cached file is okay (or force download if you prefer safety).');
+            // For safety, if we can't verify, maybe we should redownload? 
+            // Or just trust it. User said "If there is one, compare MD5".
+            // Let's trust it if we can't fetch checksums (maybe offline?), but warn.
+            // But if we can't fetch checksums, we probably can't download either.
+            useCached = true;
+        }
     }
+
+    if (!useCached) {
+        console.log(`   Downloading ${NODE_DIST_URL}...`);
+        try {
+            await downloadFile(NODE_DIST_URL, cachedTarballPath);
+            if (expectedChecksum) {
+                const actualChecksum = await calculateChecksum(cachedTarballPath);
+                if (actualChecksum !== expectedChecksum) {
+                    throw new Error(`Downloaded file checksum mismatch! Expected: ${expectedChecksum}, Actual: ${actualChecksum}`);
+                }
+                console.log('   ✅ Downloaded file checksum verified.');
+            }
+        } catch (e) {
+            console.log('   Failed to download specific version, checking internet connection or version availability.');
+            throw new Error(`Failed to download Node.js ${NODE_VERSION}: ${e}`);
+        }
+    }
+
+    // Copy to temp dir for extraction (to keep logic simple and safe)
+    fs.copyFileSync(cachedTarballPath, tempTarballPath);
 
     console.log('📂 4. Extracting Node.js binary...');
     // Extract only the node binary. tar -xzf file.tar.gz -C outdir --strip-components=1 */bin/node
     // Using tar command
     try {
-        execSync(`tar -xzf "${tarballPath}" -C "${tempDir}" --strip-components=2 "node-${NODE_VERSION}-linux-x64/bin/node"`, { stdio: 'ignore' });
+        execSync(`tar -xzf "${tempTarballPath}" -C "${tempDir}" --strip-components=2 "node-${NODE_VERSION}-linux-x64/bin/node"`, { stdio: 'ignore' });
     } catch (e) {
         // Fallback extraction if directory name differs
-         execSync(`tar -xzf "${tarballPath}" -C "${tempDir}"`, { stdio: 'ignore' });
+         execSync(`tar -xzf "${tempTarballPath}" -C "${tempDir}"`, { stdio: 'ignore' });
          // Find node binary
          execSync(`find "${tempDir}" -name node -type f -exec cp {} "${tempDir}/node" \\;`);
     }

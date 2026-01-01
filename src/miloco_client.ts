@@ -274,13 +274,20 @@ export class MilocoClient {
                      if (header.namespace === "Confirmation" && header.name === "SaveRuleConfirm") {
                          try {
                              const content = JSON.parse(payload);
-                             const rule = content.rule;
+                             // Handle case where payload is the rule itself or contains a rule property
+                             const rule = content.rule || content;
+                             
                              let msg = `Miloco suggests creating an automation rule:\n\n`;
-                             msg += `Name: ${rule.name}\n`;
-                             msg += `Condition: ${rule.condition}\n`;
+                             if (rule.name) msg += `Name: ${rule.name}\n`;
+                             if (rule.condition) msg += `Condition: ${rule.condition}\n`;
                              if (rule.execute_info && rule.execute_info.ai_recommend_action_descriptions) {
                                  msg += `Actions: ${rule.execute_info.ai_recommend_action_descriptions.join(", ")}\n`;
                              }
+                             // Fallback if no specific fields found
+                             if (!rule.name && !rule.condition) {
+                                 msg += `(Raw content): ${JSON.stringify(rule).substring(0, 200)}...\n`;
+                             }
+                             
                              msg += `\n(Note: Interactive confirmation is not yet supported via Telegram)`;
                              this.options.onMessage(chatId, msg, true);
                          } catch (e) {

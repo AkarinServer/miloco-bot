@@ -207,7 +207,7 @@ export class MilocoClient {
                   
                   const payload = {
                       query: query,
-                      mcp_list: ["MIoT Automation", "MIoT Device Control"],
+                      mcp_list: ["miot_manual_scenes", "miot_device_control", "miot_automation"],
                       camera_ids: [],
                   };
         

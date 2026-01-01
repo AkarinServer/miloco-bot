@@ -5,6 +5,7 @@ import { Telegraf } from "telegraf";
 import dotenv from "dotenv";
 import { z } from "zod";
 import { MilocoClient } from "./miloco_client.js";
+import fs from "fs";
 
 dotenv.config();
 
@@ -86,9 +87,9 @@ server.registerTool(
 server.registerTool(
   "send_telegram_photo",
   {
-    description: "Send a photo/image to a Telegram user or group",
+    description: "Send a photo/image to a Telegram user or group. Supports URLs, local file paths, and file IDs.",
     inputSchema: {
-      photo: z.string().describe("The image URL to send"),
+      photo: z.string().describe("The image URL, local file path, or Telegram file ID to send"),
       caption: z.string().optional().describe("Optional caption for the photo"),
       chat_id: z.string().optional().describe("The Telegram chat ID to send to. Leave empty (or omit) to use the configured default chat ID."),
     },
@@ -109,9 +110,27 @@ server.registerTool(
     }
 
     try {
-      // Ensure caption is treated as string | undefined compatible with Telegraf
       const extra = caption ? { caption } : {};
-      await bot.telegram.sendPhoto(targetChatId, photo, extra);
+      let photoArg: any = photo;
+
+      // Handle local file paths
+      if (!photo.startsWith("http") && (photo.startsWith("/") || photo.startsWith("./") || photo.match(/^[a-zA-Z]:/))) {
+          if (fs.existsSync(photo)) {
+             photoArg = { source: photo };
+          } else {
+             // Try mapping /app/miloco_server/.temp (Docker) to /home/ubuntu/miloco/data (Host)
+             const dockerPrefix = "/app/miloco_server/.temp";
+             const hostPrefix = "/home/ubuntu/miloco/data";
+             if (photo.startsWith(dockerPrefix)) {
+                 const mappedPath = photo.replace(dockerPrefix, hostPrefix);
+                 if (fs.existsSync(mappedPath)) {
+                     photoArg = { source: mappedPath };
+                 }
+             }
+          }
+      }
+
+      await bot.telegram.sendPhoto(targetChatId, photoArg, extra);
       return {
         content: [{ type: "text", text: `Photo sent to ${targetChatId}` }],
       };

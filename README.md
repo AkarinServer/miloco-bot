@@ -1,5 +1,7 @@
 # miloco-bot
 
+English | [中文](README_CN.md)
+
 **miloco-bot** is a TypeScript-based middleware that acts as a **Model Context Protocol (MCP)** server for [Xiaomi Miloco](https://github.com/XiaoMi/xiaomi-miloco). It bridges Miloco with **Telegram**, enabling bi-directional communication and remote management capabilities.
 
 ## Features
@@ -19,26 +21,34 @@
 
 ## Prerequisites
 
-- **Node.js** (v24 or higher recommended for building)
-- **npm** or **yarn** or **pnpm**
 - A **Telegram Bot Token** (obtained from [@BotFather](https://t.me/BotFather))
 - **Miloco** instance running and accessible.
 
-## Installation
+## Installation (Linux x64)
 
-1.  **Clone the repository**:
+We provide a single-command installation script that downloads the latest binary release and sets up the systemd service.
+
+**Run the following command as root:**
+
+```bash
+wget -O - https://raw.githubusercontent.com/AkarinServer/miloco-bot/main/scripts/install.sh | sudo bash
+```
+
+**What this script does:**
+1.  Downloads the latest `miloco-bot-linux` binary from GitHub Releases.
+2.  Installs it to `/opt/miloco-bot/`.
+3.  Sets up a systemd service named `miloco-bot`.
+4.  Creates a `.env` configuration file if one doesn't exist.
+
+### Configuration
+
+After installation, you **must** configure the bot:
+
+1.  Edit the configuration file:
     ```bash
-    git clone https://github.com/your-username/miloco-bot.git
-    cd miloco-bot
+    sudo nano /opt/miloco-bot/.env
     ```
-
-2.  **Install dependencies**:
-    ```bash
-    npm install
-    ```
-
-3.  **Configuration**:
-    Create a `.env` file in the root directory (see `.env_template`):
+2.  Fill in your details (Telegram Token, User IDs, Miloco URL, etc.):
     ```env
     # Telegram Configuration
     TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
@@ -48,30 +58,32 @@
     MILOCO_WS_URL=wss://localhost:8000/api/chat/ws/query
     MILOCO_ADMIN_USERNAME=admin
     MILOCO_PASSWORD=your_miloco_password
-    # MILOCO_DATA_DIR=/path/to/miloco/data # Optional, for image access
-
-    # Server Configuration
-    PORT=3000
-    # MCP_API_KEY=your-secret-token # Optional, for securing the MCP server endpoint
+    ```
+3.  Start the service:
+    ```bash
+    sudo systemctl start miloco-bot
     ```
 
-## Usage
+### Manage Service
 
-### Development Mode
 ```bash
-npm run dev
+sudo systemctl status miloco-bot
+sudo systemctl restart miloco-bot
+sudo journalctl -u miloco-bot -f  # View logs
 ```
 
-### Connect to Miloco
+## Connect to Miloco
+
 1.  Open your Miloco dashboard.
 2.  Navigate to **MCP Services** -> **Add Service**.
 3.  Select **Streamable HTTP**.
 4.  Fill in the details:
-    - **URL**: `http://<your-ip>:3000/mcp`
+    - **URL**: `http://<your-server-ip>:3000/mcp`
     - **Request Header (Token)**: `Authorization: Bearer <your-secret-token>` (if `MCP_API_KEY` is set).
 5.  Click **Add**.
 
 ## Telegram Commands
+
 - `/start`: Check if the bot is running and you are authorized.
 - `/help`: Show available commands.
 - `/ping`: Check connection to Miloco.
@@ -79,6 +91,7 @@ npm run dev
 - `/status`: Show system status.
 
 ## MCP Tools Provided
+
 The following tools are exposed to Miloco:
 
 - `send_telegram_message`:
@@ -99,42 +112,24 @@ The following tools are exposed to Miloco:
     - **Description**: Enables or disables a specific rule.
     - **Inputs**: `rule_id` (string), `enabled` (boolean).
 
-## Deployment on Ubuntu (Single Binary)
+## Development
 
-To package the application as a single executable for Linux (e.g., Ubuntu):
+For contributors who want to build from source:
 
-1.  **Build the Linux Binary**:
+1.  Clone and install dependencies:
+    ```bash
+    git clone https://github.com/AkarinServer/miloco-bot.git
+    cd miloco-bot
+    npm install
+    ```
+2.  Run in dev mode:
+    ```bash
+    npm run dev
+    ```
+3.  Build binary:
     ```bash
     npm run build:linux
     ```
-    - This downloads the Node.js 24 binary (cached in `.cache/`), generates a blob, and injects it to create `dist/miloco-bot-linux`.
-
-2.  **Deploy to Server**:
-    Copy the following to your server (e.g., `/opt/miloco-bot/`):
-    - `dist/miloco-bot-linux`
-    - `scripts/manage.sh`
-    - `.env`
-
-3.  **Install and Run**:
-    On the server:
-    ```bash
-    chmod +x manage.sh
-    sudo ./manage.sh install
-    ```
-
-4.  **Manage Service**:
-    ```bash
-    sudo ./manage.sh start    # Start service
-    sudo ./manage.sh stop     # Stop service
-    sudo ./manage.sh restart  # Restart service
-    sudo ./manage.sh logs     # View logs
-    ```
-
-## Project Structure
-
-- `src/index.ts`: Main entry point, MCP server, Telegram bot logic, and MCP tool definitions.
-- `src/miloco_client.ts`: Client for interacting with Miloco API (Login, Rules, etc.).
-- `scripts/`: Build and management scripts.
 
 ## License
 

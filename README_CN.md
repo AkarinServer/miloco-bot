@@ -1,5 +1,7 @@
 # miloco-bot
 
+[English](README.md) | 中文
+
 **miloco-bot** 是一个基于 TypeScript 开发的中间件程序，它作为 [Xiaomi Miloco](https://github.com/XiaoMi/xiaomi-miloco) 的 **Model Context Protocol (MCP)** 服务端。它在 Miloco 和 **Telegram** 之间架起了一座桥梁，实现了双向通信和远程管理能力。
 
 ## 功能特性
@@ -19,26 +21,34 @@
 
 ## 前置要求
 
-- **Node.js** (构建建议 v24 或更高版本)
-- **npm** 或 **yarn** 或 **pnpm**
 - **Telegram Bot Token** (通过 [@BotFather](https://t.me/BotFather) 获取)
 - 已运行且可访问的 **Miloco** 实例。
 
-## 安装步骤
+## 安装步骤 (Linux x64)
 
-1.  **克隆仓库**:
+我们提供了一个单行命令安装脚本，用于下载最新的二进制版本并配置 systemd 服务。
+
+**请使用 root 权限运行以下命令：**
+
+```bash
+wget -O - https://raw.githubusercontent.com/AkarinServer/miloco-bot/main/scripts/install.sh | sudo bash
+```
+
+**脚本执行内容：**
+1.  从 GitHub Releases 下载最新的 `miloco-bot-linux` 二进制文件。
+2.  安装到 `/opt/miloco-bot/` 目录。
+3.  创建一个名为 `miloco-bot` 的 systemd 服务。
+4.  如果不存在，则创建一个初始的 `.env` 配置文件。
+
+### 配置
+
+安装完成后，你**必须**配置机器人：
+
+1.  编辑配置文件：
     ```bash
-    git clone https://github.com/your-username/miloco-bot.git
-    cd miloco-bot
+    sudo nano /opt/miloco-bot/.env
     ```
-
-2.  **安装依赖**:
-    ```bash
-    npm install
-    ```
-
-3.  **配置环境**:
-    在项目根目录创建一个 `.env` 文件（参考 `.env_template`）：
+2.  填写你的详细信息（Telegram Token, 用户 ID, Miloco URL 等）：
     ```env
     # Telegram 配置
     TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
@@ -48,30 +58,32 @@
     MILOCO_WS_URL=wss://localhost:8000/api/chat/ws/query
     MILOCO_ADMIN_USERNAME=admin
     MILOCO_PASSWORD=your_miloco_password
-    # MILOCO_DATA_DIR=/path/to/miloco/data # 可选，用于图片访问
-
-    # 服务器配置
-    PORT=3000
-    # MCP_API_KEY=your-secret-token # 可选，用于保护 MCP 服务端接口
+    ```
+3.  启动服务：
+    ```bash
+    sudo systemctl start miloco-bot
     ```
 
-## 使用方法
+### 服务管理
 
-### 开发模式
 ```bash
-npm run dev
+sudo systemctl status miloco-bot
+sudo systemctl restart miloco-bot
+sudo journalctl -u miloco-bot -f  # 查看日志
 ```
 
-### 连接到 Miloco
+## 连接到 Miloco
+
 1.  打开你的 Miloco 控制面板。
 2.  导航至 **MCP 服务 (MCP Services)** -> **添加服务 (Add Service)**。
 3.  选择 **Streamable HTTP**。
 4.  填写详细信息：
-    - **URL**: `http://<你的IP>:3000/mcp`
+    - **URL**: `http://<你的服务器IP>:3000/mcp`
     - **请求头 (Token)**: `Authorization: Bearer <your-secret-token>` (如果设置了 `MCP_API_KEY`)。
 5.  点击 **添加 (Add)**。
 
 ## Telegram 命令
+
 - `/start`: 检查机器人运行状态及权限。
 - `/help`: 显示可用命令。
 - `/ping`: 检查与 Miloco 的连接状态。
@@ -79,6 +91,7 @@ npm run dev
 - `/status`: 显示系统状态信息。
 
 ## 提供的 MCP 工具
+
 以下工具已暴露给 Miloco：
 
 - `send_telegram_message`:
@@ -99,42 +112,24 @@ npm run dev
     - **描述**: 开启或关闭指定规则。
     - **输入**: `rule_id` (字符串), `enabled` (布尔值)。
 
-## Ubuntu 部署 (单体程序)
+## 开发指南
 
-将程序打包为 Linux (如 Ubuntu) 下的单体可执行文件：
+如果你是开发者并希望从源码构建：
 
-1.  **构建 Linux 二进制文件**:
+1.  克隆并安装依赖：
+    ```bash
+    git clone https://github.com/AkarinServer/miloco-bot.git
+    cd miloco-bot
+    npm install
+    ```
+2.  运行开发模式：
+    ```bash
+    npm run dev
+    ```
+3.  构建二进制文件：
     ```bash
     npm run build:linux
     ```
-    - 该命令会自动下载 Node.js 24 二进制文件（缓存在 `.cache/` 中），生成 Blob 并注入，最终在 `dist/` 目录下生成 `miloco-bot-linux`。
-
-2.  **上传至服务器**:
-    将以下文件复制到你的服务器 (例如 `/opt/miloco-bot/`):
-    - `dist/miloco-bot-linux`
-    - `scripts/manage.sh`
-    - `.env`
-
-3.  **安装并运行**:
-    在服务器上运行：
-    ```bash
-    chmod +x manage.sh
-    sudo ./manage.sh install
-    ```
-
-4.  **服务管理**:
-    ```bash
-    sudo ./manage.sh start    # 启动服务
-    sudo ./manage.sh stop     # 停止服务
-    sudo ./manage.sh restart  # 重启服务
-    sudo ./manage.sh logs     # 查看日志
-    ```
-
-## 项目结构
-
-- `src/index.ts`: 程序入口、MCP 服务器、Telegram 机器人逻辑及 MCP 工具定义。
-- `src/miloco_client.ts`: 用于与 Miloco API 交互的客户端（登录、规则管理等）。
-- `scripts/`: 构建和管理脚本。
 
 ## 许可证
 
